@@ -8,8 +8,13 @@ import os
 import json
 from pathlib import Path
 from dotenv import load_dotenv
-load_dotenv()
 
+# New imports
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+from models import Base, Feedback
+
+load_dotenv()
 
 DATA_DIR = Path(__file__).parent / "data"
 
@@ -23,9 +28,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-openai.api_key = os.environ["API_KEY"]  # Ensure you have the API key in your environment variables
-# openai.api_key = ""
-
+openai.api_key = os.environ["API_KEY"]
 
 class FeedbackData(BaseModel):
     response: str
@@ -33,78 +36,40 @@ class FeedbackData(BaseModel):
     feedback: str
     user_query: str
 
-
+# Replace the PostgreSQL code with SQLite and SQLAlchemy
+DATABASE_URL = "sqlite:///./feedback.db"  # Change this to match your desired SQLite database file
+engine = create_engine(DATABASE_URL)
+Base.metadata.create_all(bind=engine)
 
 @app.post("/api/feedback")
 async def store_feedback(data: FeedbackData):
-    response_file = DATA_DIR / f"{data.message}.json"
-    print(f"response_file: {response_file}")
+    db = Session(bind=engine)
 
-    if not os.path.exists(response_file):
-        with open(response_file, "w") as f:
-            f.write("[]")
-
-    with open(response_file, "r") as f:
-        feedback_list = json.load(f)
-
-    feedback_list.append({
-      "user_query": data.user_query,
-      "feedback": data.feedback
-    })
-
-    with open(response_file, "w") as f:
-        json.dump(feedback_list, f)
+    feedback_item = Feedback(
+        response=data.response,
+        feedback=data.feedback,
+        user_query=data.user_query,
+    )
+    db.add(feedback_item)
+    db.commit()
+    db.refresh(feedback_item)
+    db.close()
 
     return {"status": "success"}
 
-
-    # PostgreSQL database storage (commented out for future use)
-    """
-    import psycopg2
-
-    # Replace with your own PostgreSQL connection details
-    connection = psycopg2.connect(
-        dbname="your_db_name",
-        user="your_user",
-        password="your_password",
-        host="your_host",
-        port="your_port"
-    )
-
-    cursor = connection.cursor()
-
-    # Creating the table if it doesn't exist
-    cursor.execute("""
-        # CREATE TABLE IF NOT EXISTS feedback (
-        #     id SERIAL PRIMARY KEY,
-        #     response TEXT NOT NULL,
-        #     feedback VARCHAR(255) NOT NULL
-        # )
-    """)
-    connection.commit()
-
-    # Inserting the feedback data into the table
-    cursor.execute(
-        "INSERT INTO feedback (response, feedback) VALUES (%s, %s)",
-        (data.response, data.feedback)
-    )
-    connection.commit()
-
-    cursor.close()
-    connection.close()
-    """
-
 @app.get("/api/feedback/{response}")
 async def get_feedback(response: str):
-    response_file = DATA_DIR / f"{response}.json"
+    db = Session(bind=engine)
+    feedback_list = db.query(Feedback).filter(Feedback.response == response).all()
+    db.close()
 
-    if not os.path.exists(response_file):
+    if not feedback_list:
         return {"status": "error", "message": "Response not found"}
 
-    with open(response_file, "r") as f:
-        feedback_list = json.load(f)
+    return {"status": "success", "feedback": [fb.__dict__ for fb in feedback_list]}
 
-    return {"status": "success", "feedback": feedback_list}
+# (unchanged chat history code)
+
 
 
 class Message(BaseModel):
